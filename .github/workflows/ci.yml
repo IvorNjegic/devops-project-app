@@ -53,12 +53,18 @@ jobs:
             # Gradimo sliku i tagiramo je s git SHA hashom (jedinstveni identifikator commita)
             # i s "latest" tagom. SHA tag osigurava da svaki build ima jedinstveni tag
             # pa možemo uvijek znati točno koja verzija koda je u kojoj slici.
+            # Pretvaramo repository ime u lowercase jer Docker ne prihvaća velika slova
+          
+     
+            - name: Set lowercase repository name
+              run: echo "REPO_LOWER=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
             - name: Build Docker image
               run: |
-                  docker build \
-                    -t ghcr.io/${{ github.repository }}/${{ matrix.service }}:${{ github.sha }} \
-                    -t ghcr.io/${{ github.repository }}/${{ matrix.service }}:latest \
-                    ./${{ matrix.service }}
+              docker build \
+                -t ghcr.io/${{ env.REPO_LOWER }}/${{ matrix.service }}:${{ github.sha }} \
+                -t ghcr.io/${{ env.REPO_LOWER }}/${{ matrix.service }}:latest \
+                ./${{ matrix.service }}
 
             # Korak 4: Trivy skeniranje ranjivosti
             # Ovo je "quality gate" — ako Trivy pronađe CRITICAL ranjivost,
@@ -67,9 +73,9 @@ jobs:
             - name: Trivy vulnerability scan
               uses: aquasecurity/trivy-action@master
               with:
-                  image-ref: ghcr.io/${{ github.repository }}/${{ matrix.service }}:${{ github.sha }}
-                  format: table
-                  severity: CRITICAL
+                image-ref: ghcr.io/${{ env.REPO_LOWER }}/${{ matrix.service }}:${{ github.sha }}
+                format: table
+                severity: CRITICAL
 
             # Korak 5: Push slike u GHCR
             # Slika se objavljuje samo ako je push na main branch (ne na PR)
@@ -77,5 +83,5 @@ jobs:
             - name: Push image to GHCR
               if: github.ref == 'refs/heads/main' && github.event_name == 'push'
               run: |
-                  docker push ghcr.io/${{ github.repository }}/${{ matrix.service }}:${{ github.sha }}
-                  docker push ghcr.io/${{ github.repository }}/${{ matrix.service }}:latest
+                docker push ghcr.io/${{ env.REPO_LOWER }}/${{ matrix.service }}:${{ github.sha }}
+                docker push ghcr.io/${{ env.REPO_LOWER }}/${{ matrix.service }}:latest

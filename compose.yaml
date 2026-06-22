@@ -1,0 +1,123 @@
+# ============================================
+# Docker Compose - Lokalni razvojni environment
+# ============================================
+# Ova datoteka definira sve servise, njihove međusobne ovisnosti,
+# mrežu, volumene i environment varijable.
+# Pokretanje: docker compose up --build
+# Zaustavljanje: docker compose down
+
+services:
+    # ------------------------------------------
+    # PostgreSQL baza podataka
+    # ------------------------------------------
+    # Koristi se gotova slika postgres:16-alpine.
+    # Alpine verzija je manja i sigurnija od pune Debian verzije.
+    postgres:
+        image: postgres:16-alpine
+        container_name: ticketing-postgres
+        env_file: .env
+        volumes:
+            # Named volume za perzistentnost — podaci preživljavaju restart kontejnera.
+            # Bez ovoga, svaki put kad ugasiš kontejner, baza se briše.
+            - pgdata:/var/lib/postgresql/data
+            # Init skripta koja kreira tablicu ticket_orders pri prvom pokretanju.
+            # Docker Postgres slika automatski izvršava sve .sql datoteke
+            # koje se nalaze u /docker-entrypoint-initdb.d/ direktoriju.
+            - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+        ports:
+            - "5432:5432"
+        healthcheck:
+            test: ["CMD-SHELL", "pg_isready -U ticketing_user -d ticketing"]
+            interval: 5s
+            timeout: 5s
+            retries: 5
+
+    # ------------------------------------------
+    # Redis (message queue / cache)
+    # ------------------------------------------
+    # Redis služi kao posrednik između API servisa i workera.
+    # API stavlja narudžbe u Redis queue, worker ih čita i obrađuje.
+    redis:
+        image: redis:7-alpine
+        container_name: ticketing-redis
+        ports:
+            - "6379:6379"
+        healthcheck:
+            test: ["CMD", "redis-cli", "ping"]
+            interval: 5s
+            timeout: 5s
+            retries: 5
+
+    # ------------------------------------------
+    # API servis
+    # ------------------------------------------
+    api:
+        build:
+            context: ./api
+            dockerfile: Dockerfile
+        container_name: ticketing-api
+        env_file: .env
+        ports:
+            - "8080:8080"
+        volumes:
+            # Volume mount za hot-reload: promjene u lokalnom api/src direktoriju
+            # automatski se reflektiraju unutar kontejnera bez rebuilda.
+            # Ovo drastično ubrzava razvoj jer ne moraš raditi rebuild nakon svake promjene.
+            - ./api/src:/app/src
+        depends_on:
+            # API ovisi o bazi i Redisu — neće se pokrenuti dok oni nisu zdravi.
+            # condition: service_healthy znači da Compose čeka da healthcheck prođe.
+            postgres:
+                condition: service_healthy
+            redis:
+                condition: service_healthy
+        # U developmentu koristimo nodemon umjesto node.
+        # Nodemon automatski restarta servis kad detektira promjenu u kodu (hot-reload).
+        command: ["npx", "nodemon", "src/server.js"]
+
+    # ------------------------------------------
+    # Worker servis
+    # ------------------------------------------
+    worker:
+        build:
+            context: ./worker
+            dockerfile: Dockerfile
+        container_name: ticketing-worker
+        env_file: .env
+        volumes:
+            - ./worker/src:/app/src
+        depends_on:
+            postgres:
+                condition: service_healthy
+            redis:
+                condition: service_healthy
+        command: ["npx", "nodemon", "src/worker.js"]
+
+    # ------------------------------------------
+    # Frontend servis
+    # ------------------------------------------
+    frontend:
+        build:
+            context: ./frontend
+            dockerfile: Dockerfile
+        container_name: ticketing-frontend
+        env_file: .env
+        environment:
+            # Ova varijabla govori frontendu gdje se nalazi API servis.
+            # Unutar Docker mreže servisi se referenciraju po imenu (api:8080),
+            # ali browser korisnika ne može pristupiti Docker mreži direktno,
+            # pa koristimo localhost:8080 jer smo mapirali port na host.
+            - API_BASE_URL=http://localhost:8080
+        ports:
+            - "3000:3000"
+        volumes:
+            - ./frontend/src:/app/src
+        depends_on:
+            - api
+        command: ["npx", "nodemon", "src/server.js"]
+
+# Named volume — Docker ga čuva između restarta kontejnera.
+# Čak i kad napraviš "docker compose down", podaci ostaju.
+# Jedino "docker compose down -v" briše volumene.
+volumes:
+    pgdata:

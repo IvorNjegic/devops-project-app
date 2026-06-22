@@ -1,47 +1,27 @@
-# ============================================
-# GitHub Actions CI/CD Pipeline
-# ============================================
-# Ovaj workflow se pokreće automatski na svaki push ili pull request
-# prema main branchu. Gradi Docker slike, skenira ih za ranjivosti,
-# i objavljuje ih u GitHub Container Registry (GHCR).
-
 name: CI/CD Pipeline
 
-# Definiramo kada se workflow pokreće:
 on:
     push:
-        branches: [main] # Na svaki push na main branch
+        branches: [main]
     pull_request:
-        branches: [main] # Na svaki pull request prema main branchu
+        branches: [main]
 
-# Permissions - dozvoljavamo workflow-u da piše pakete (push slika u GHCR)
-# i čita sadržaj repozitorija
 permissions:
     contents: read
     packages: write
 
 jobs:
-    # ------------------------------------------
-    # Job: Build, Scan & Push
-    # ------------------------------------------
-    # Koristimo matrix strategiju da isti posao ponovimo za svaki servis.
-    # Umjesto da pišemo tri odvojena joba, matrix nam omogućuje da definiramo
-    # listu servisa i GitHub Actions će automatski pokrenuti job za svaki.
     build-scan-push:
         runs-on: ubuntu-latest
         strategy:
+            fail-fast: false
             matrix:
                 service: [api, frontend, worker]
 
         steps:
-            # Korak 1: Checkout koda
-            # Preuzima kod iz repozitorija na runner (GitHub-ov server)
             - name: Checkout code
               uses: actions/checkout@v4
 
-            # Korak 2: Login u GitHub Container Registry
-            # GHCR je besplatni Docker registry koji dolazi s GitHubom.
-            # Koristimo GITHUB_TOKEN koji je automatski dostupan u workflow-u.
             - name: Login to GHCR
               uses: docker/login-action@v3
               with:
@@ -49,39 +29,25 @@ jobs:
                   username: ${{ github.actor }}
                   password: ${{ secrets.GITHUB_TOKEN }}
 
-            # Korak 3: Build Docker slike
-            # Gradimo sliku i tagiramo je s git SHA hashom (jedinstveni identifikator commita)
-            # i s "latest" tagom. SHA tag osigurava da svaki build ima jedinstveni tag
-            # pa možemo uvijek znati točno koja verzija koda je u kojoj slici.
-            # Pretvaramo repository ime u lowercase jer Docker ne prihvaća velika slova
-          
-     
             - name: Set lowercase repository name
               run: echo "REPO_LOWER=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
 
             - name: Build Docker image
               run: |
-              docker build \
-                -t ghcr.io/${{ env.REPO_LOWER }}/${{ matrix.service }}:${{ github.sha }} \
-                -t ghcr.io/${{ env.REPO_LOWER }}/${{ matrix.service }}:latest \
-                ./${{ matrix.service }}
+                  docker build \
+                    -t ghcr.io/${{ env.REPO_LOWER }}/${{ matrix.service }}:${{ github.sha }} \
+                    -t ghcr.io/${{ env.REPO_LOWER }}/${{ matrix.service }}:latest \
+                    ./${{ matrix.service }}
 
-            # Korak 4: Trivy skeniranje ranjivosti
-            # Ovo je "quality gate" — ako Trivy pronađe CRITICAL ranjivost,
-            # workflow pada (exit-code: 1) i slika se NE objavljuje u registry.
-            # To sprječava deploy ranjivih slika u produkciju.
             - name: Trivy vulnerability scan
               uses: aquasecurity/trivy-action@master
               with:
-                image-ref: ghcr.io/${{ env.REPO_LOWER }}/${{ matrix.service }}:${{ github.sha }}
-                format: table
-                severity: CRITICAL
+                  image-ref: ghcr.io/${{ env.REPO_LOWER }}/${{ matrix.service }}:${{ github.sha }}
+                  format: table
+                  severity: CRITICAL
 
-            # Korak 5: Push slike u GHCR
-            # Slika se objavljuje samo ako je push na main branch (ne na PR)
-            # i samo ako je Trivy skeniranje prošlo bez CRITICAL ranjivosti.
             - name: Push image to GHCR
               if: github.ref == 'refs/heads/main' && github.event_name == 'push'
               run: |
-                docker push ghcr.io/${{ env.REPO_LOWER }}/${{ matrix.service }}:${{ github.sha }}
-                docker push ghcr.io/${{ env.REPO_LOWER }}/${{ matrix.service }}:latest
+                  docker push ghcr.io/${{ env.REPO_LOWER }}/${{ matrix.service }}:${{ github.sha }}
+                  docker push ghcr.io/${{ env.REPO_LOWER }}/${{ matrix.service }}:latest
